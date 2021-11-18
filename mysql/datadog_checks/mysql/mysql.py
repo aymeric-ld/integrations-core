@@ -32,6 +32,7 @@ from .const import (
     RATE,
     REPLICA_VARS,
     SCHEMA_VARS,
+    TABLE_VARS,
     STATUS_VARS,
     SYNTHETIC_VARS,
     VARIABLES_VARS,
@@ -313,9 +314,14 @@ class MySql(AgentCheck):
             metrics.update(PERFORMANCE_VARS)
 
         if is_affirmative(self._config.options.get('schema_size_metrics', False)):
-            # report avg query response time per schema to Datadog
+            # report size of schemas in MiB to Datadog
             results['information_schema_size'] = self._query_size_per_schema(db)
             metrics.update(SCHEMA_VARS)
+
+        if is_affirmative(self._config.options.get('table_size_metrics', False)):
+            # report size of tables in MiB to Datadog
+            results['information_table_size'] = self._query_size_per_table(db)
+            metrics.update(TABLE_VARS)
 
         if is_affirmative(self._config.options.get('replication', self._config.dbm_enabled)):
             replication_metrics = self._collect_replication_metrics(db, results, above_560)
@@ -808,8 +814,6 @@ class MySql(AgentCheck):
             return None
 
     def _query_size_per_schema(self, db):
-        # Fetches the avg query execution time per schema and returns the
-        # value in microseconds
         try:
             with closing(db.cursor()) as cursor:
                 cursor.execute(SQL_QUERY_SCHEMA_SIZE)
@@ -828,7 +832,30 @@ class MySql(AgentCheck):
 
                 return schema_size
         except (pymysql.err.InternalError, pymysql.err.OperationalError) as e:
-            self.warning("Avg exec time performance metrics unavailable at this time: %s", e)
+            self.warning("Size of schemas metrics unavailable at this time: %s", e)
+
+        return {}
+
+    def _query_size_per_table(self, db):
+        try:
+            with closing(db.cursor()) as cursor:
+                cursor.execute(SQL_QUERY_SCHEMA_SIZE)
+
+                if cursor.rowcount < 1:
+                    self.warning("Failed to fetch records from the information schema 'tables' table.")
+                    return None
+
+                table_size = {}
+                for row in cursor.fetchall():
+                    table_name = str(row[0])
+                    size = long(row[1])
+
+                    # set the tag as the dictionary key
+                    table_size["schema:{0}".format(table_name)] = size
+
+                return table_size
+        except (pymysql.err.InternalError, pymysql.err.OperationalError) as e:
+            self.warning("Size of tables metrics unavailable at this time: %s", e)
 
         return {}
 
